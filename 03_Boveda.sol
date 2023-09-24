@@ -3,10 +3,12 @@ pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-contract BovedaDelTesoro {
+contract BovedaDelTesoro is ReentrancyGuard {
     address public owner;
-    mapping(address => bool) public walletsAutorizadas;
+    //mapping(address => bool) public walletsAutorizadas;
+    WalletAutorizada[] walletsAutorizadas;
     mapping(address => uint256) public balances;
     mapping(uint256 => Propuesta) public propuestas;
     uint256 public contadorPropuestas;
@@ -31,6 +33,11 @@ contract BovedaDelTesoro {
         mapping(address => bool) haVotado;
     }
 
+    struct WalletAutorizada {
+        address wallet;
+        bool isAuth;
+    }
+
     enum TipoPropuesta {
         CompraVentaERC20,
         CompraVentaERC721,
@@ -47,8 +54,20 @@ contract BovedaDelTesoro {
     }
 
     modifier soloWalletAutorizada() {
-        require(walletsAutorizadas[msg.sender], "No estas autorizado");
+        require(isAuthorized(msg.sender), "No estas autorizado");
         _;
+    }
+
+    function isAuthorized(address _wallet) public view returns (bool) {
+        for (uint256 i = 0; i < walletsAutorizadas.length; i++) {
+            if (
+                walletsAutorizadas[i].wallet == _wallet &&
+                walletsAutorizadas[i].isAuth
+            ) {
+                return true;
+            }
+        }
+        return false;
     }
 
     modifier propuestaActiva(uint256 _idPropuesta) {
@@ -69,13 +88,16 @@ contract BovedaDelTesoro {
             msg.value == TARIFA_ENTRADA,
             "Debes pagar la tarifa de entrada"
         );
-        require(!walletsAutorizadas[msg.sender], "Ya te has unido al contrato");
+        require(!isAuthorized(msg.sender), "Ya te has unido al contrato");
         require(
             contadorWallets < LIMITE_WALLETS,
             "Se ha alcanzado el limite de wallets"
         );
 
-        walletsAutorizadas[msg.sender] = true;
+        WalletAutorizada memory nuevaWallet;
+        nuevaWallet.wallet = msg.sender;
+        nuevaWallet.isAuth = true;
+        walletsAutorizadas.push(nuevaWallet);
         contadorWallets++;
         payable(owner).transfer(TARIFA_ENTRADA);
     }
@@ -151,12 +173,46 @@ contract BovedaDelTesoro {
         );
 
         if (prop.tipo == TipoPropuesta.CompraVentaERC20) {
-            // Lógica para comprar/vender ERC-20
+            // Asegúrate de que el contrato tiene suficientes tokens para vender
+            require(
+                IERC20(prop.token).balanceOf(address(this)) >= prop.cantidad,
+                "No hay suficientes tokens ERC20 en el contrato"
+            );
+            // Transfiere los tokens al destino
+            require(
+                IERC20(prop.token).transfer(prop.destino, prop.cantidad),
+                "La transferencia de tokens ERC20 fallo"
+            );
         } else if (prop.tipo == TipoPropuesta.CompraVentaERC721) {
-            // Lógica para comprar/vender ERC-721
+            // Asegúrate de que el contrato posee el token ERC721
+            require(
+                IERC721(prop.token).ownerOf(prop.cantidad) == address(this),
+                "El contrato no posee el token ERC721"
+            );
+            // Transfiere el token ERC721 al destino
+            IERC721(prop.token).transferFrom(
+                address(this),
+                prop.destino,
+                prop.cantidad
+            );
         } else if (prop.tipo == TipoPropuesta.TransferenciaERC20) {
-            IERC20(prop.token).transfer(prop.destino, prop.cantidad);
+            // Asegúrate de que el contrato tiene suficientes tokens para transferir
+            require(
+                IERC20(prop.token).balanceOf(address(this)) >= prop.cantidad,
+                "No hay suficientes tokens ERC20 en el contrato"
+            );
+            // Transfiere los tokens al destino
+            require(
+                IERC20(prop.token).transfer(prop.destino, prop.cantidad),
+                "La transferencia de tokens ERC20 fallo"
+            );
         } else if (prop.tipo == TipoPropuesta.TransferenciaERC721) {
+            // Asegúrate de que el contrato posee el token ERC721
+            require(
+                IERC721(prop.token).ownerOf(prop.cantidad) == address(this),
+                "El contrato no posee el token ERC721"
+            );
+            // Transfiere el token ERC721 al destino
             IERC721(prop.token).transferFrom(
                 address(this),
                 prop.destino,
@@ -168,9 +224,29 @@ contract BovedaDelTesoro {
         propuestasActivas--;
     }
 
-    function retirarETH(uint256 _cantidad) public soloWalletAutorizada {
+    function retirarETH(
+        uint256 _cantidad
+    ) public soloWalletAutorizada nonReentrant {
         require(balances[msg.sender] >= _cantidad, "Fondos insuficientes");
         balances[msg.sender] -= _cantidad;
         payable(msg.sender).transfer(_cantidad);
+    }
+
+    function distribuirGanancias() public soloOwner {
+        uint256 balance = address(this).balance;
+        uint256 cantidadPorWallet = balance / (contadorWallets + 1); // +1 para incluir al owner
+
+        // Asegurarse de que el balance es suficiente para distribuir a todas las wallets
+        require(
+            balance >= cantidadPorWallet * (contadorWallets + 1),
+            "Balance insuficiente"
+        );
+
+        // Distribuir a cada wallet autorizada
+        for (uint256 i = 0; i < walletsAutorizadas.length; i++) {
+            balances[walletsAutorizadas[i].wallet] += cantidadPorWallet;
+        }
+
+        balances[owner] += cantidadPorWallet;
     }
 }
