@@ -28,6 +28,7 @@ contract BovedaDelTesoro {
         uint256 votosEnContra;
         bool ejecutada;
         uint256 timestamp;
+        mapping(address => bool) haVotado;
     }
 
     enum TipoPropuesta {
@@ -90,19 +91,21 @@ contract BovedaDelTesoro {
             "Hay demasiadas propuestas activas"
         );
 
-        Propuesta memory nuevaPropuesta = Propuesta({
-            proponente: msg.sender,
-            tipo: _tipo,
-            token: _token,
-            cantidad: _cantidad,
-            destino: _destino,
-            votosAFavor: 0,
-            votosEnContra: 0,
-            ejecutada: false,
-            timestamp: block.timestamp
-        });
+        // Crear una nueva propuesta directamente en el mapping de propuestas
+        Propuesta storage nuevaPropuesta = propuestas[contadorPropuestas];
 
-        propuestas[contadorPropuestas] = nuevaPropuesta;
+        // Inicializar los campos de la propuesta
+        nuevaPropuesta.proponente = msg.sender;
+        nuevaPropuesta.tipo = _tipo;
+        nuevaPropuesta.token = _token;
+        nuevaPropuesta.cantidad = _cantidad;
+        nuevaPropuesta.destino = _destino;
+        nuevaPropuesta.votosAFavor = 0;
+        nuevaPropuesta.votosEnContra = 0;
+        nuevaPropuesta.ejecutada = false;
+        nuevaPropuesta.timestamp = block.timestamp;
+
+        // Incrementar el contador de propuestas y propuestas activas
         contadorPropuestas++;
         propuestasActivas++;
     }
@@ -111,17 +114,26 @@ contract BovedaDelTesoro {
         uint256 _idPropuesta,
         bool _aFavor
     ) public soloWalletAutorizada propuestaActiva(_idPropuesta) {
-        require(
-            !propuestas[_idPropuesta].ejecutada,
-            "La propuesta ya fue ejecutada"
-        );
-        // Aquí deberías implementar lógica para evitar votos duplicados
+        Propuesta storage propuesta = propuestas[_idPropuesta];
 
+        // Verificar si la propuesta ya fue ejecutada
+        require(!propuesta.ejecutada, "La propuesta ya fue ejecutada");
+
+        // Verificar si el votante ya ha votado
+        require(
+            !propuesta.haVotado[msg.sender],
+            "Ya has votado en esta propuesta"
+        );
+
+        // Registrar el voto
         if (_aFavor) {
-            propuestas[_idPropuesta].votosAFavor++;
+            propuesta.votosAFavor++;
         } else {
-            propuestas[_idPropuesta].votosEnContra++;
+            propuesta.votosEnContra++;
         }
+
+        // Marcar al votante como que ya ha votado
+        propuesta.haVotado[msg.sender] = true;
     }
 
     function ejecutarPropuesta(
